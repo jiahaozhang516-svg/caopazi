@@ -26,9 +26,9 @@
     "zh": "南林 ACM AI Hub 每日自动签到 + 图书馆座位预约（三层B区，可配优先座位、特殊时段、闭馆自动裁剪），带设置页与完成度水晶角标。",
     "en": "Daily check-in for NJFU ACM AI Hub plus library seat booking with configurable preferences, per-weekday windows and a progress badge."
    },
-   "homepage": "https://github.com/jiahaozhang516-svg/aihub-checkin",
+   "homepage": "https://github.com/jiahaozhang516-svg/caopazi",
    "repository": {
-    "url": "https://github.com/jiahaozhang516-svg/aihub-checkin"
+    "url": "https://github.com/jiahaozhang516-svg/caopazi"
    },
    "metadata": {
     "category": "tools",
@@ -47,7 +47,7 @@
      "publishTimestamp": 1793666599,
      "source": {
       "type": "git",
-      "url": "https://github.com/jiahaozhang516-svg/aihub-checkin",
+      "url": "https://github.com/jiahaozhang516-svg/caopazi",
       "commit": "54ac2901c26ce56b8f5f0560f04e47a6561fac48"
      },
      "engines": {
