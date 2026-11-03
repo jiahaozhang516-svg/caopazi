@@ -56,6 +56,16 @@ const DIR = path.join(HOME, 'aihub-checkin')
 const STORE_FILE = path.join(DIR, 'store.json')
 const QR_FILE = path.join(DIR, 'login-qr.png')
 
+/** 插件版本：直接读自己旁边的 package.json，设置页角落显示用。 */
+const VERSION = (() => {
+  try {
+    const file = fileURLToPath(new URL('./package.json', import.meta.url))
+    return String(JSON.parse(fs.readFileSync(file, 'utf8')).version || '')
+  } catch (_e) {
+    return ''
+  }
+})()
+
 /** 侧栏角标读取的状态接口。 */
 const STATUS_ROUTE = '/aihub-checkin/status'
 /** 用户层「关掉角标」的开关：在 Download 里建这个空文件，下次启动会摘掉前端声明。 */
@@ -1115,7 +1125,7 @@ function registerConfigRoute(ctx) {
             try {
               if (req.method === 'GET') {
                 const store = readStore()
-                send(200, { ok: true, settings: publicSettings(store), seatLast: store.seatLast || null })
+                send(200, { ok: true, settings: publicSettings(store), seatLast: store.seatLast || null, version: VERSION })
                 return
               }
               if (req.method === 'POST') {
@@ -1130,7 +1140,7 @@ function registerConfigRoute(ctx) {
                 }
                 const store = readStore()
                 const changed = applyWebConfig(store, patch)
-                send(200, { ok: true, changed: changed, settings: publicSettings(readStore()) })
+                send(200, { ok: true, changed: changed, settings: publicSettings(readStore()), version: VERSION })
                 return
               }
               send(405, { ok: false, message: 'method not allowed' })
