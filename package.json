@@ -1,6 +1,6 @@
 {
   "name": "caopazi",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "private": true,
   "description": "草爬子：南林 ACM AI Hub 每日签到 + 图书馆座位预约（DSHM 端侧插件，带设置页与完成度角标）",
   "type": "module",
