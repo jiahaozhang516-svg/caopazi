@@ -499,21 +499,27 @@ async function ensureSeatLogin(store, force) {
 /**
  * 带鉴权重试地跑一次需要 token 的操作：
  * 遇到「未登录 / 300」时丢掉内存里的旧客户端、强制重登，再试一次。
- * 取消、补订这类一次性动作都走这里，免得会话过期后一直失败。
+ * 注意：这个客户端有两条失败路径——抛异常（seats/book）和返回 {ok:false,message}（cancel），
+ * 两条都要认，否则会话过期后取消会一直失败。
  */
 async function withSeatAuth(store, fn) {
+  const isAuth = (v) => {
+    const text = String((v && (v.message || v)) || '')
+    return text.indexOf('登录') >= 0 || text.indexOf('300') >= 0
+  }
+  const relogin = async () => {
+    seatClient = null
+    store.seatSession = null
+    return ensureSeatLogin(store, true)
+  }
   let client = await ensureSeatLogin(store, false)
   try {
-    return await fn(client)
+    const res = await fn(client)
+    if (res && res.ok === false && isAuth(res.message)) return fn(await relogin())
+    return res
   } catch (error) {
-    const text = String((error && error.message) || '')
-    if (text.indexOf('登录') >= 0 || text.indexOf('300') >= 0) {
-      seatClient = null
-      store.seatSession = null
-      client = await ensureSeatLogin(store, true)
-      return await fn(client)
-    }
-    throw error
+    if (!isAuth(error)) throw error
+    return fn(await relogin())
   }
 }
 
@@ -642,12 +648,14 @@ async function runSeatBooking(store, opts) {
         pool = pool.filter((seat) => seat.devId !== picked.seat.devId)
         continue
       }
-      const booked = await client.book({
-        devId: picked.seat.devId,
-        date: date,
-        start: w.start,
-        end: w.end,
-      })
+      const booked = await withSeatAuth(store, (c) =>
+        c.book({
+          devId: picked.seat.devId,
+          date: date,
+          start: w.start,
+          end: w.end,
+        }),
+      )
       attempts.push({ seat: String(picked.seat.devName), ok: booked.ok, message: String(booked.message || '') })
       if (booked.ok) {
         entry.ok = true
