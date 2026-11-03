@@ -461,6 +461,8 @@ let seatClient = null
 let seatRunning = false
 /** 抢座互斥：定时任务和手动工具不能同时下单，否则可能重复预约。 */
 let seatBusy = false
+/** 已预热过会话的目标日期（每天只预热一次）。 */
+let seatWarmDay = ''
 
 function seatSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -796,10 +798,21 @@ async function seatTick() {
     if (!s || !s.enabled || !s.user || !s.pass) return
     const now = nowCN()
     const open = parseClock(s.openTime)
-    if (open === null || now.minutes < open) return
+    if (open === null) return
     const date = seatTargetDate(store)
     const last = store.seatLast
     if (last && last.ok && last.date === date) return
+    // 开抢前 2 分钟预热会话：token 大约 2 小时就过期，07:00 第一发必然先撞「未登录」，
+    // 重登要跑「公钥 + 登录」两个请求，白白多花 2-3 秒——抢座就差这几秒。
+    if (now.minutes < open) {
+      if (now.minutes === open - 2 && seatWarmDay !== date) {
+        seatWarmDay = date
+        try {
+          await ensureSeatLogin(store, true)
+        } catch (_ignored) {}
+      }
+      return
+    }
     // 业务性拒绝（时段冲突 / 参数错误）：换座位也没用，当天不再重试，省得触发反爬
     if (
       last &&
