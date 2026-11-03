@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createSeatClient, pickSeat, dateInCN, compactDate, DEFAULT_UA } from './libseat.js'
 
-export const name = 'aihub-checkin'
+export const name = 'caopazi'
 export const inject = ['tools']
 
 const API = 'https://acm.njfu.edu.cn/aihub'
