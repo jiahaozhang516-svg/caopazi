@@ -496,6 +496,27 @@ async function ensureSeatLogin(store, force) {
   return client
 }
 
+/**
+ * 带鉴权重试地跑一次需要 token 的操作：
+ * 遇到「未登录 / 300」时丢掉内存里的旧客户端、强制重登，再试一次。
+ * 取消、补订这类一次性动作都走这里，免得会话过期后一直失败。
+ */
+async function withSeatAuth(store, fn) {
+  let client = await ensureSeatLogin(store, false)
+  try {
+    return await fn(client)
+  } catch (error) {
+    const text = String((error && error.message) || '')
+    if (text.indexOf('登录') >= 0 || text.indexOf('300') >= 0) {
+      seatClient = null
+      store.seatSession = null
+      client = await ensureSeatLogin(store, true)
+      return await fn(client)
+    }
+    throw error
+  }
+}
+
 /** 座位表缓存：抢座窗口内每 20 秒一发，不能每次都重新拉整张表。 */
 let seatPoolCache = { date: '', at: 0, seats: null }
 
@@ -636,6 +657,8 @@ async function runSeatBooking(store, opts) {
         entry.uuid = booked.uuid
         entry.message =
           '预约成功：' + picked.seat.devName + ' ' + date + ' ' + w.start + '-' + w.end + '（' + picked.detail + winNote(w) + overrideNote + '）'
+        // 下单成功后座位表变了，作废缓存
+        seatPoolCache = { date: '', at: 0, seats: null }
         break
       }
       if (!firstError) firstError = String(booked.message || '')
@@ -1458,8 +1481,9 @@ export function apply(ctx, config) {
             uuid = last.uuid
           }
           try {
-            const client = await ensureSeatLogin(store, false)
-            const res = await client.cancel(uuid, resvId)
+            const res = await withSeatAuth(store, (client) => client.cancel(uuid, resvId))
+            // 取消成功后座位表变了，作废缓存，避免下一次挑座还按旧数据判断
+            if (res.ok) seatPoolCache = { date: '', at: 0, seats: null }
             return {
               ok: res.ok,
               summary: res.ok ? '已取消预约 ' + resvId : '取消失败：' + res.message,
