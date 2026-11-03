@@ -1,8 +1,8 @@
 {
  "format": 1,
  "title": {
-  "zh": "草爬子 · 南林工具集",
-  "en": "Caopazi · NJFU toolbox"
+  "zh": "CaoPazi · 南林工具集",
+  "en": "CaoPazi · NJFU toolbox"
  },
  "description": {
   "zh": "南林 AI Hub 每日签到 + 图书馆座位预约，一个插件搞定。",
@@ -20,8 +20,8 @@
  },
  "plugins": [
   {
-   "name": "aihub-checkin",
-   "title": "草爬子（aihub-checkin）",
+   "name": "caopazi",
+   "title": "CaoPazi（草爬子）",
    "description": {
     "zh": "南林 ACM AI Hub 每日自动签到 + 图书馆座位预约（三层B区，可配优先座位、特殊时段、闭馆自动裁剪），带设置页与完成度水晶角标。",
     "en": "Daily check-in for NJFU ACM AI Hub plus library seat booking with configurable preferences, per-weekday windows and a progress badge."
