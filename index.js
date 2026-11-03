@@ -459,6 +459,8 @@ async function runCheckin(store, opts) {
 /** 跨 tick 复用同一个客户端，避免每次都重新登录。 */
 let seatClient = null
 let seatRunning = false
+/** 抢座互斥：定时任务和手动工具不能同时下单，否则可能重复预约。 */
+let seatBusy = false
 
 function seatSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -580,6 +582,8 @@ function parseOverrides(text) {
  * @param {object} opts { dryRun?: boolean, reason?: string }
  */
 async function runSeatBooking(store, opts) {
+  if (seatBusy) throw new Error('上一次抢座还在执行中，请稍后再试')
+  seatBusy = true
   const s = store.settings.seat
   const at = new Date().toISOString()
   const date = seatTargetDate(store)
@@ -703,6 +707,7 @@ async function runSeatBooking(store, opts) {
         writeStore(fresh)
       } catch (_ignored) {}
     }
+    seatBusy = false
   }
   return entry
 }
@@ -791,6 +796,12 @@ async function seatTick() {
     }
     const attempts = (store.seatHistory || []).filter((h) => h.date === date).length
     if (attempts >= 20) return
+    // 鉴权类失败连碰 3 次就停手：密码改过 / 账号被限制时，继续重试只会白白触发风控
+    const authFails = (store.seatHistory || [])
+      .filter((h) => h.date === date)
+      .slice(0, 3)
+      .filter((h) => h.message && (h.message.indexOf('登录') >= 0 || h.message.indexOf('300') >= 0)).length
+    if (authFails >= 3 && last && last.message && last.message.indexOf('登录') >= 0) return
     if (last && last.at && Date.now() - new Date(last.at).getTime() < gapMs) return
     seatRunning = true
     try {
