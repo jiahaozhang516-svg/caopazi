@@ -1,0 +1,5 @@
+node_modules/
+*.zip
+store.json
+login-qr.png
+.DS_Store
