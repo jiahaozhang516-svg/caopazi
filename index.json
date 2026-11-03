@@ -1,0 +1,60 @@
+{
+ "format": 1,
+ "title": {
+  "zh": "草爬子 · 南林工具集",
+  "en": "Caopazi · NJFU toolbox"
+ },
+ "description": {
+  "zh": "南林 AI Hub 每日签到 + 图书馆座位预约，一个插件搞定。",
+  "en": "Daily check-in for NJFU AI Hub and library seat booking."
+ },
+ "metadata": {
+  "categories": {
+   "tools": {
+    "title": {
+     "zh": "实用工具",
+     "en": "Tools"
+    }
+   }
+  }
+ },
+ "plugins": [
+  {
+   "name": "aihub-checkin",
+   "title": "草爬子（aihub-checkin）",
+   "description": {
+    "zh": "南林 ACM AI Hub 每日自动签到 + 图书馆座位预约（三层B区，可配优先座位、特殊时段、闭馆自动裁剪），带设置页与完成度水晶角标。",
+    "en": "Daily check-in for NJFU ACM AI Hub plus library seat booking with configurable preferences, per-weekday windows and a progress badge."
+   },
+   "homepage": "https://github.com/jiahaozhang516-svg/aihub-checkin",
+   "repository": {
+    "url": "https://github.com/jiahaozhang516-svg/aihub-checkin"
+   },
+   "metadata": {
+    "category": "tools",
+    "keywords": [
+     "njfu",
+     "checkin",
+     "library",
+     "seat"
+    ],
+    "labels": [],
+    "sortKeys": {}
+   },
+   "versions": [
+    {
+     "version": "2.1.0",
+     "publishTimestamp": 1793666599,
+     "source": {
+      "type": "git",
+      "url": "https://github.com/jiahaozhang516-svg/aihub-checkin",
+      "commit": "54ac2901c26ce56b8f5f0560f04e47a6561fac48"
+     },
+     "engines": {
+      "dsh": ">=0.2.0-rc.2 || >=0.2.1-rc.2"
+     }
+    }
+   ]
+  }
+ ]
+}
