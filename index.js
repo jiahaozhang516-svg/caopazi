@@ -550,6 +550,21 @@ function winNote(w) {
   return w && w.clamped ? '；当天开放 ' + w.openStart + '-' + w.openEnd + '，已自动裁到 ' + w.start + '-' + w.end : ''
 }
 
+/**
+ * 把失败归到一个已知类别，便于「能自动处理的自动处理，不能的留证」。
+ * @returns {'auth'|'blocked'|'window'|'taken'|'protocol'|'unknown'}
+ */
+function classifySeatError(text) {
+  const s = String(text || '')
+  if (s.indexOf('登录') >= 0 || s.indexOf('300') >= 0) return 'auth'
+  if (s.indexOf('403') >= 0 || s.indexOf('非 JSON') >= 0 || s.indexOf('反爬') >= 0) return 'blocked'
+  if (s.indexOf('时段') >= 0 || s.indexOf('开放') >= 0 || s.indexOf('时间') >= 0) return 'window'
+  if (s.indexOf('当前时段') >= 0 || s.indexOf('已预约') >= 0) return 'taken'
+  if (s.indexOf('参数') >= 0 || s.indexOf('参数错误') >= 0 || s.indexOf('非法') >= 0) return 'protocol'
+  if (s.indexOf('没有可用座位') >= 0 || s.indexOf('座位表为空') >= 0) return 'taken'
+  return 'unknown'
+}
+
 /** 目标日期是周几（0=周日 … 6=周六，按日历日算，不受时区影响）。 */
 function weekdayOf(iso) {
   const parts = String(iso).split('-').map(Number)
@@ -674,6 +689,12 @@ async function runSeatBooking(store, opts) {
         break
       }
       if (!firstError) firstError = String(booked.message || '')
+      // 留证：把服务端原始返回存下来（截断），遇到未知错误才能直接定位，而不是猜
+      if (booked.raw) {
+        try {
+          entry.raw = JSON.stringify(booked.raw).slice(0, 600)
+        } catch (_e) {}
+      }
       // 业务层拒绝（时段冲突 / 参数错误）换座位也没用，直接停
       if (firstError.indexOf('当前时段') >= 0 || firstError.indexOf('参数') >= 0) break
       pool = pool.filter((seat) => seat.devId !== picked.seat.devId)
@@ -686,6 +707,7 @@ async function runSeatBooking(store, opts) {
         .map((a) => (a.seat ? a.seat + '：' : '') + a.message)
         .join(' / ')
       entry.message = '预约失败：' + (firstError || tail || '没有可用座位')
+      entry.kind = classifySeatError(firstError || tail)
     }
   } catch (error) {
     entry.message = '抢座出错：' + String((error && error.message) || error)
@@ -1321,7 +1343,8 @@ export function apply(ctx, config) {
             '优先座位：' + (s.preferred.length ? s.preferred.join(' → ') : '（未配置）'),
             '兜底规则：尾数 ' + (s.parity || '不限') + '、就近 ' + s.maxDistance + '、随便一个=' + (s.fallbackAny ? '是' : '否'),
             '账号：' + (s.user ? s.user : '（未配置）') + '；密码：' + (s.pass ? '已填' : '（未填）'),
-            '最近一次：' + (last ? last.date + ' ' + (last.ok ? '成功' : '失败') + '：' + last.message : '无'),
+            '最近一次：' + (last ? last.date + ' ' + (last.ok ? '成功' : '失败[' + (last.kind || 'unknown') + ']') + '：' + last.message : '无'),
+            ...(last && last.raw ? ['服务端原始返回：' + last.raw] : []),
           ]
           if (store.seatHistory.length > 1) {
             lines.push('')
