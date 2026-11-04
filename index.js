@@ -942,9 +942,14 @@ async function buildStatus() {
   const seatDate = seatTargetDate(store)
   const seatLast = store.seatLast || null
   const seatDone = Boolean(seatLast && seatLast.ok && seatLast.date === seatDate)
+  // 「完美」= 抢到了优先列表的第一个（默认 B004）；抢到备选/兜底都算完成但不完美
+  const topSeat = Array.isArray(seatCfg.preferred) && seatCfg.preferred.length ? String(seatCfg.preferred[0]) : ''
+  const seatPerfect = seatDone && topSeat !== '' && String(seatLast.seat || '') === topSeat
   const seatInfo = {
     enabled: seatCfg.enabled === true,
     done: seatDone,
+    perfect: seatPerfect,
+    top: topSeat,
     date: seatDate,
     seat: seatDone ? String(seatLast.seat || '') : '',
     message: seatLast ? String(seatLast.message || '') : '',
@@ -968,6 +973,7 @@ async function buildStatus() {
 
   return {
     doneToday: overallDone,
+    perfect: overallDone && (!seatInfo.enabled || seatInfo.perfect),
     checkinDone: doneToday === true,
     loginState: loginState,
     live: live,
