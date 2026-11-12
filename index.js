@@ -76,6 +76,8 @@ let statusOrigin = null
 const DEFAULT_STORE = {
   settings: {
     enabled: true,
+    /** 手动模式：只查询状态、不自动提交签到（站点加了人机验证后，自动提交无法通过）。 */
+    manualCheckin: false,
     time: '08:00',
     cookie: '',
     seat: {
@@ -437,6 +439,7 @@ async function runCheckin(store, opts) {
         streak: pick(streak, null),
       }
       pushHistory(store, entry)
+      delete store.verifyDate
       writeStore(store)
       return { ok: true, summary: entry.message, detail: '签到时间：' + at }
     }
@@ -447,7 +450,16 @@ async function runCheckin(store, opts) {
       return { ok: false, summary: entry.message, detail: '执行 aihub_login_start 重新扫码。' }
     }
     const msg = (r.json && r.json.message) || ('HTTP ' + r.status)
-    const entry = { at, ok: false, kind: 'checkin-failed', message: '签到失败：' + msg }
+    // 站点给签到加了人机验证（腾讯 TCaptcha）：要 {ticket, randstr}，伪造无效。
+    // 记下「今天需要人工验证」，不再反复重试——重试也不会过。
+    const needVerify = msg.indexOf('请先完成验证') >= 0 || msg.indexOf('验证未通过') >= 0
+    const entry = {
+      at,
+      ok: false,
+      kind: needVerify ? 'need-verify' : 'checkin-failed',
+      message: needVerify ? '签到需要人工验证：请到 aihub 网页手动签到一次' : '签到失败：' + msg,
+    }
+    if (needVerify) store.verifyDate = at.slice(0, 10)
     pushHistory(store, entry)
     writeStore(store)
     return { ok: false, summary: entry.message, detail: (r.text || '').slice(0, 300) }
@@ -777,6 +789,10 @@ async function tick(reason) {
     if (!s.enabled) return
     if (!String(s.cookie || '').trim()) return
     if (store.lastSuccessDate === now.date) return
+    // 今天已经确认需要人工验证：不再自动重试（重试也不会通过，只会刷请求）
+    if (store.verifyDate === now.date) return
+    // 手动模式：完全不提交签到，只靠状态接口/角标提醒用户自己去网页点
+    if (store.settings.manualCheckin) return
 
     const target = parseClock(s.time)
     if (target === null) return
@@ -812,17 +828,9 @@ async function seatTick() {
     const date = seatTargetDate(store)
     const last = store.seatLast
     if (last && last.ok && last.date === date) return
-    // 开抢前 2 分钟预热会话：token 大约 2 小时就过期，07:00 第一发必然先撞「未登录」，
-    // 重登要跑「公钥 + 登录」两个请求，白白多花 2-3 秒——抢座就差这几秒。
-    if (now.minutes < open) {
-      if (now.minutes === open - 2 && seatWarmDay !== date) {
-        seatWarmDay = date
-        try {
-          await ensureSeatLogin(store, true)
-        } catch (_ignored) {}
-      }
-      return
-    }
+    // 站点切到 CAS 之后密码登录已停用，预热重登这条路走不通了：
+    // 现在的会话是 ic-cookie（由浏览器登录下发），过期只能重新取，脚本无法刷新。
+    if (now.minutes < open) return
     // 业务性拒绝（时段冲突 / 参数错误）：换座位也没用，当天不再重试，省得触发反爬
     if (
       last &&
@@ -930,11 +938,16 @@ async function buildStatus() {
     } catch (_ignored) {}
   }
 
+  // 今天已经被站点要求人机验证且还没签上 → 需要你手动去网页点一次
+  const needVerify = store.verifyDate === now.date && doneToday !== true
+
   let title
   if (!store.settings.enabled) title = 'AI Hub 签到：已暂停'
   else if (loginState === 'expired') title = 'AI Hub 登录已过期，需要重新扫码'
   else if (loginState === 'anonymous') title = 'AI Hub 还没登录（点这里让我出二维码）'
   else if (doneToday) title = 'AI Hub 今日已签到' + (streak === null ? '' : '（连续 ' + streak + ' 天）')
+  else if (needVerify) title = 'AI Hub 需要人工验证：打开 aihub 网页签到一次'
+  else if (store.settings.manualCheckin) title = 'AI Hub 今日未签到：打开 aihub 网页手动签到'
   else title = 'AI Hub 今日未签到，' + store.settings.time + ' 自动签到'
 
   // 图书馆抢座：只看本地记录（不额外打接口，避免反爬）
@@ -974,6 +987,7 @@ async function buildStatus() {
   return {
     doneToday: overallDone,
     perfect: overallDone && (!seatInfo.enabled || seatInfo.perfect),
+    needVerify: needVerify,
     checkinDone: doneToday === true,
     loginState: loginState,
     live: live,
