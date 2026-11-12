@@ -40,6 +40,17 @@ export function randomNonce(len = 16) {
   return out
 }
 
+/** 伪 UUID（浏览器端 ic-cookie 的形态：8-4-4-4-12 十六进制）。 */
+function randomUuid() {
+  const hex = '0123456789abcdef'
+  const seg = (n) => {
+    let s = ''
+    for (let i = 0; i < n; i += 1) s += hex.charAt(Math.floor(Math.random() * 16))
+    return s
+  }
+  return seg(8) + '-' + seg(4) + '-4' + seg(3) + '-a' + seg(3) + '-' + seg(12)
+}
+
 /** 把 SPKI base64 公钥包成 PEM。 */
 function toPem(b64) {
   const body = String(b64 || '').replace(/\s+/g, '').match(/.{1,64}/g)
@@ -51,6 +62,47 @@ export function rsaEncrypt(publicKeyB64, text) {
   return crypto
     .publicEncrypt({ key: toPem(publicKeyB64), padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from(text, 'utf8'))
     .toString('base64')
+}
+
+/**
+ * 统一身份认证（uia.njfu.edu.cn/authserver）的密码加密。
+ * 它用的是前端 security.js 里那套「教科书式 RSA」：
+ *   · 没有 PKCS#1 填充
+ *   · 明文按 **小端 16 位字** 装进 BigInt（digit[j] = b[2j] + (b[2j+1]<<8)）
+ *   · 明文先零填充到 chunkSize = 2*(位数-1) = 126 字节
+ *   · 结果输出 256 位十六进制
+ * 用常规 PKCS#1 会得到「账号或密码错误」，这是踩过的坑。
+ */
+const CAS_MODULUS =
+  '8aed7e057fe8f14c73550b0e6467b023616ddc8fa91846d2613cdb7f7621e3cada4cd5d812d627af6b87727ade4e26d26208b7326815941492b2204c3167ab2d53df1e3a2c9153bdb7c8c2e968df97a5e7e01cc410f92c4c2c2fba529b3ee988ebc1fca99ff5119e036d732c368acf8beba01aa2fdafa45b21e4de4928d0d403'
+const CAS_N = BigInt('0x' + CAS_MODULUS)
+const CAS_E = BigInt(65537)
+const CAS_ONE = BigInt(1)
+const CAS_ZERO = BigInt(0)
+const CAS_CHUNK = 2 * (Math.floor((CAS_N.toString(2).length + 15) / 16) - 1)
+
+function modPow(base, exp, mod) {
+  let result = CAS_ONE
+  let b = base % mod
+  let e = exp
+  while (e > CAS_ZERO) {
+    if (e & CAS_ONE) result = (result * b) % mod
+    b = (b * b) % mod
+    e >>= CAS_ONE
+  }
+  return result
+}
+
+export function casEncrypt(password) {
+  const bytes = []
+  for (const ch of String(password)) bytes.push(ch.charCodeAt(0) & 0xff)
+  while (bytes.length % CAS_CHUNK !== 0) bytes.push(0)
+  let m = CAS_ZERO
+  for (let j = 0; j < bytes.length; j += 2) {
+    const word = BigInt(bytes[j] + ((j + 1 < bytes.length ? bytes[j + 1] : 0) << 8))
+    m |= word << BigInt(16 * (j / 2))
+  }
+  return modPow(m, CAS_E, CAS_N).toString(16).padStart(256, '0')
 }
 
 /** AES-128-CBC + ZeroPadding + 大写 HEX（前端 j(devId, nonce) 的等价实现）。 */
@@ -232,24 +284,88 @@ export function createSeatClient(options) {
     return json
   }
 
+  /**
+   * 登录（2026-11-12 实测）：站点已切到 CAS 单点登录，密码登录接口停用。
+   * 真正可用的自动化链路（全自动、无需人工）：
+   *   ① GET /ic-web/auth/address?finalAddress=…&manager=false → 服务端签发 uuid 并给出登录地址
+   *   ② 跟随该地址 → 302 到 uia.njfu.edu.cn/authserver/login?service=…
+   *   ③ 取 CAS 登录页，抽出 execution
+   *   ④ RSA 加密密码（无填充 + 小端 16 位字序，见 casEncrypt）后 POST
+   *   ⑤ CAS 返回的 doAuth 页面里写着 window.location.href='…/auth/token?uuid=…&uniToken=…'
+   *   ⑥ GET 它 → 302 + Set-Cookie: ic-cookie ← 之后所有接口靠这个 cookie
+   */
   async function login(user, pass) {
-    const pkRes = await call('/login/publicKey')
-    const pk = (pkRes && pkRes.data) || {}
-    if (!pk.publicKey) throw new Error('拿不到登录公钥：' + JSON.stringify(pkRes).slice(0, 120))
-    pkCache = { key: pk.publicKey, at: Date.now() }
-    await sleep(400)
-    const body = JSON.stringify({
-      logonName: user,
-      password: rsaEncrypt(pk.publicKey, String(pass) + ';' + pk.nonceStr),
-      captcha: '',
-      consoleType: '4',
+    const HOST_LIB = 'libseat.njfu.edu.cn'
+    const HOST_CAS = 'uia.njfu.edu.cn'
+    const jar = { [HOST_LIB]: {}, [HOST_CAS]: {} }
+    const cookieOf = (host) =>
+      Object.entries(jar[host] || {})
+        .map(([k, v]) => k + '=' + v)
+        .join('; ')
+    const absorbInto = (host, res) => {
+      let list = []
+      try {
+        list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []
+      } catch (_e) {}
+      for (const line of list) {
+        const first = String(line).split(';')[0]
+        const eq = first.indexOf('=')
+        if (eq > 0) jar[host][first.slice(0, eq).trim()] = first.slice(eq + 1).trim()
+      }
+    }
+    const grab = async (url, host, opts) => {
+      const headers = Object.assign({ 'user-agent': ua, accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }, (opts && opts.headers) || {})
+      const ck = cookieOf(host)
+      if (ck) headers.cookie = ck
+      const res = await fetch(url, Object.assign({ headers, signal: AbortSignal.timeout(20000) }, opts || {}))
+      absorbInto(host, res)
+      return res
+    }
+
+    // ① 取登录地址
+    const addr = await call('/auth/address?finalAddress=' + encodeURIComponent('https://' + HOST_LIB) + '&manager=false')
+    if (!addr || addr.code !== 0 || !addr.data) throw new Error('取登录地址失败：' + ((addr && addr.message) || '未知'))
+    // ② 跟着它跳（手动处理重定向，拿到 CAS 地址）
+    let res = await grab(addr.data, HOST_LIB, { redirect: 'manual' })
+    let casUrl = res.headers.get('location') || ''
+    if (!casUrl) throw new Error('没拿到 CAS 跳转地址')
+    // ③ CAS 登录页
+    res = await grab(casUrl, HOST_CAS)
+    const html = await res.text()
+    const ex = /name="execution"\s+value="([^"]+)"/.exec(html)
+    if (!ex) throw new Error('CAS 页面里没有 execution')
+    // ④ 提交账号密码
+    await sleep(300)
+    const form = new URLSearchParams({
+      username: String(user),
+      password: casEncrypt(String(pass)),
+      encrypted: 'true',
+      execution: ex[1],
+      _eventId: 'submit',
+      loginType: '1',
+      rememberMe: 'true',
     })
-    const res = await call('/login/user', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
-    if (!res || res.code !== 0) throw new Error('登录失败：' + ((res && res.message) || '未知'))
-    state.token = res.data.token
-    state.accNo = Number(res.data.accNo) || 0
+    res = await grab(casUrl, HOST_CAS, {
+      method: 'POST',
+      body: form,
+      headers: { 'content-type': 'application/x-www-form-urlencoded', referer: casUrl, origin: 'https://' + HOST_CAS },
+    })
+    // ⑤ doAuth 页面里给出下一步地址
+    const page = await res.text()
+    const jump = /window\.location\.href\s*=\s*'([^']+)'/.exec(page)
+    if (!jump) {
+      if (page.indexOf('账号或密码错误') >= 0) throw new Error('登录失败：账号或密码不正确')
+      throw new Error('CAS 登录后没有拿到跳转地址')
+    }
+    // ⑥ 换 ic-cookie
+    await grab(jump[1], HOST_LIB, { redirect: 'manual' })
+    const cookie = jar[HOST_LIB]['ic-cookie']
+    if (!cookie) throw new Error('没能换到 ic-cookie')
+    state.cookies['ic-cookie'] = cookie
+    state.cookies['rememberMe'] = 'deleteMe'
     state.user = String(user)
-    return { accNo: state.accNo, name: res.data.trueName || '', dept: res.data.deptName || '' }
+    if (!state.accNo) state.accNo = 80000
+    return { accNo: state.accNo, name: '', dept: '' }
   }
 
   async function seats(roomId, dateCompact) {
@@ -301,8 +417,14 @@ export function createSeatClient(options) {
     return { ok: !!(res && res.code === 0), message: (res && res.message) || '未知' }
   }
 
+  /**
+   * 站点改成 CAS 单点登录后，密码登录已停用。
+   * 实测认证凭证就是 `ic-cookie` 这一个 cookie（浏览器登录后由服务端下发，HttpOnly）：
+   *   Cookie: ic-cookie=<uuid>  →  读写接口全部可用，不需要 token。
+   * 所以只要手里有 ic-cookie 就算「已登录」，不必走密码登录。
+   */
   function hasSession() {
-    return Boolean(state.token)
+    return Boolean(state.token) || Boolean(state.cookies && state.cookies['ic-cookie'])
   }
 
   function snapshot() {
