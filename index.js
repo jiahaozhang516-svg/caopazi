@@ -33,9 +33,39 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import dns from 'node:dns'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createSeatClient, pickSeat, dateInCN, compactDate, DEFAULT_UA } from './libseat.js'
+
+// 2026-11-12：DSHM 升级后 Node 会优先解析 IPv6，而学校站点的 AAAA 记录连不通，
+// 表现为 `connect ECONNREFUSED 2001:da8:101a:150::233:443`，站点请求全挂。
+// 强制 IPv4 优先即可（Python 那边一直走 IPv4，所以从来没出过这个问题）。
+try {
+  dns.setDefaultResultOrder('ipv4first')
+} catch (_ignored) {}
+
+/**
+ * 2026-11-13：只设 result order 在这套 Node 构建上仍然先连 AAAA（校园网 IPv6 不可达，
+ * 443 直接 refused），签到查询一路报 connect ECONNREFUSED 2001:da8:…。
+ * 改成在 socket 层显式指定 IPv4：用 undici 的 Agent(connect.family = 4)。
+ * 万一取不到 undici 就退回全局 fetch（保持旧行为，不让插件因此起不来）。
+ */
+let fetchImpl = null
+async function fetchV4(url, init) {
+  if (!fetchImpl) {
+    try {
+      const { fetch: uFetch, Agent } = await import('undici')
+      const agent = new Agent({ connect: { family: 4 } })
+      fetchImpl = (u, i) => uFetch(u, Object.assign({}, i || {}, { dispatcher: agent }))
+    } catch (_ignored) {
+      fetchImpl = function (u, i) {
+        return globalThis.fetch(u, i)
+      }
+    }
+  }
+  return fetchImpl(url, init)
+}
 
 export const name = 'caopazi'
 export const inject = ['tools']
@@ -214,7 +244,7 @@ function absorbCookies(jar, res) {
 }
 
 async function httpJson(url, options) {
-  const res = await fetch(url, options)
+  const res = await fetchV4(url, options)
   const text = await res.text()
   let json = null
   try {
@@ -306,7 +336,7 @@ async function wecomPoll(webKey, lastStatus) {
 }
 
 async function loginStart(store) {
-  const res = await fetch(API + '/api/auth/login', {
+  const res = await fetchV4(API + '/api/auth/login', {
     method: 'GET',
     redirect: 'manual',
     headers: { 'user-agent': UA },
@@ -325,7 +355,7 @@ async function loginStart(store) {
     throw new Error('企业微信没有下发二维码 key：' + hint)
   }
 
-  const png = await fetch(WECOM_QR + '?key=' + encodeURIComponent(key.webKey), {
+  const png = await fetchV4(WECOM_QR + '?key=' + encodeURIComponent(key.webKey), {
     headers: { 'user-agent': UA },
     signal: AbortSignal.timeout(20000),
   })
@@ -349,7 +379,7 @@ async function loginComplete(store, pending, authCode) {
   const jar = new Map(Object.entries(pending.cookies || {}))
   const url =
     REDIRECT_URI + '?code=' + encodeURIComponent(authCode) + '&state=' + encodeURIComponent(pending.state || '')
-  let res = await fetch(url, {
+  let res = await fetchV4(url, {
     method: 'GET',
     redirect: 'manual',
     headers: { 'user-agent': UA, cookie: cookieHeader(jar) },
@@ -362,7 +392,7 @@ async function loginComplete(store, pending, authCode) {
     if (!loc) break
     const next = new URL(loc, 'https://acm.njfu.edu.cn').toString()
     if (!next.startsWith('https://acm.njfu.edu.cn/')) break
-    res = await fetch(next, {
+    res = await fetchV4(next, {
       method: 'GET',
       redirect: 'manual',
       headers: { 'user-agent': UA, cookie: cookieHeader(jar) },
@@ -1009,7 +1039,7 @@ async function buildStatus() {
 async function probeStatusRoute() {
   if (!statusOrigin) return '未注册（webServer 未就绪）'
   try {
-    const res = await fetch(statusOrigin + STATUS_ROUTE, {
+    const res = await fetchV4(statusOrigin + STATUS_ROUTE, {
       headers: { accept: 'application/json' },
       cache: 'no-store',
       signal: AbortSignal.timeout(4000),
