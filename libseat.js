@@ -314,10 +314,15 @@ export function createSeatClient(options) {
       }
     }
     const grab = async (url, host, opts) => {
-      const headers = Object.assign({ 'user-agent': ua, accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }, (opts && opts.headers) || {})
+      const extra = Object.assign({}, (opts && opts.headers) || {})
+      const headers = Object.assign({ 'user-agent': ua, accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }, extra)
       const ck = cookieOf(host)
       if (ck) headers.cookie = ck
-      const res = await fetch(url, Object.assign({ headers, signal: AbortSignal.timeout(20000) }, opts || {}))
+      // 注意：不能把 opts 直接 Object.assign 到 fetch 配置上，那会用 opts.headers 覆盖掉
+      // 这里已经拼好的 headers（含 cookie），导致 CAS 提交时丢会话。
+      const init = Object.assign({ signal: AbortSignal.timeout(20000) }, opts || {})
+      init.headers = headers
+      const res = await fetch(url, init)
       absorbInto(host, res)
       return res
     }
@@ -355,7 +360,9 @@ export function createSeatClient(options) {
     const jump = /window\.location\.href\s*=\s*'([^']+)'/.exec(page)
     if (!jump) {
       if (page.indexOf('账号或密码错误') >= 0) throw new Error('登录失败：账号或密码不正确')
-      throw new Error('CAS 登录后没有拿到跳转地址')
+      // 带一段原文，方便排查是哪种页面（CAS 错误页 / 首页 / 空白）
+      const brief = page.replace(/\s+/g, ' ').slice(0, 120)
+      throw new Error('CAS 登录后没有拿到跳转地址（HTTP ' + res.status + '）：' + brief)
     }
     // ⑥ 换 ic-cookie
     await grab(jump[1], HOST_LIB, { redirect: 'manual' })
